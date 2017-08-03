@@ -10,7 +10,7 @@ from influxdb import InfluxDBClient
 from cephlib.units import b2ssize_10, b2ssize
 
 from .db import LocalDB
-from .data import influxtime2tm, VM, TSStatInfo, parse_db_creds, TSDBCreds
+from .data import influxtime2tm, Node, TSStatInfo, parse_db_creds, TSDBCreds
 
 
 def parse(descr: str) -> Tuple[str, Dict[str, str]]:
@@ -56,7 +56,7 @@ IO_METRICS = [
 ]
 
 
-def fill_vms_io_stats(client: InfluxDBClient, vms: List[VM]) -> None:
+def fill_vms_io_stats(client: InfluxDBClient, vms: List[Node]) -> None:
     metr_stat_t = "select sum(value),mean(value),median(value),stddev(value) from {} where instance_id='{}' group by {}"
     for vm in vms:
         for metr, dev, units in IO_METRICS:
@@ -118,15 +118,15 @@ def most_loaded_vms(conn: Any, count: int = 100) -> List[str]:
     return []
 
 
-def lookup_vms(conn: Any, vm_ids: List[str]) -> Dict[str, VM]:
+def lookup_vms(conn: Any, vm_ids: List[str]) -> Dict[str, Node]:
     client = cast(InfluxDBClient, conn)
 
     q = "select first(value) from virt_cpu_time group by instance_id"
-    vms = {}  # type: Dict[str, VM]
+    vms = {}  # type: Dict[str, Node]
     for (metric, tags), serie in client.query(q).items():
         vm_id = tags['instance_id']
         if vm_id in vm_ids:
-            vm = vms[vm_id] = VM(vm_id)
+            vm = vms[vm_id] = Node(vm_id)
             vm.start_time = influxtime2tm(list(serie)[0]['time'])
 
     q = "select last(value) from virt_cpu_time group by instance_id"
@@ -214,7 +214,6 @@ def copy_data_from_influx(db: LocalDB,
     else:
         min_time = max_time = None
 
-    futures = []  # type: List[Future]
     units_dct = {}  # type: Dict[str, str]
 
     with db:
@@ -261,7 +260,6 @@ def copy_data_from_influx(db: LocalDB,
                         all_metrics_to_sync.append((host, metric, dev, group_by, is_vm, min_time, max_time, conn_pool))
 
     all_metrics_to_sync.sort()
-
     total_ts = len(all_metrics_to_sync)
     with ThreadPoolExecutor(max_workers=conn_count) as executor:
         influxtime2tm_l = influxtime2tm
@@ -288,6 +286,8 @@ def copy_data_from_influx(db: LocalDB,
             t = time.time()
             assert group_by_dct is None
             hostname = node[:8] if is_vm else node
+
+            data_gen = list(data_gen)
             iter1 = (influxtime2tm_l(i['time']) for i in data_gen)
             iter2 = (i['value'] for i in data_gen)
 
@@ -306,38 +306,6 @@ def copy_data_from_influx(db: LocalDB,
             msg = msg_t.format(host=hostname, dev=str(device), metr=metric, time=time.time() - t,
                                size=len(times) // 1024, perc=perc_left)
             print(msg)
-
-
-def copy_data_from_influx_ex(db: LocalDB, conn: Any, instances: List[str], nodes: List[str], np: bool = False):
-
-    client = cast(InfluxDBClient, conn)
-    influxtime2tm_l = influxtime2tm
-    toutc = time.mktime(time.localtime()) - time.mktime(time.gmtime())
-
-    def data_loader(params):
-        instance, device, metric = params
-        q = "select value from {} where instance_id='{}'".format(metric, instance)
-        if device is not None:
-            q += " and device='{}'".format(device)
-        return instance, device, metric, [list(io_serie) for io_serie in client.query(q)]
-
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        for instance, device, metric, series in executor.map(data_loader, items):
-            for io_serie in series:
-                t = time.time()
-                print("{} {:>5s} {:>25s}".format(instance[:8], str(device), metric), end='')
-                iter1 = (influxtime2tm_l(i['time']) for i in io_serie)
-                iter2 = (i['value'] for i in io_serie)
-
-                if np:
-                    times = numpy.fromiter(iter1, dtype=float) - toutc
-                    values = numpy.fromiter(iter2, dtype=float)
-                else:
-                    times = list(i - toutc for i in iter1)
-                    values = list(iter2)
-
-                db["{},{},{}".format(metric, instance, device)] = (times, values)
-                print(" {:>3.1f}s  size = {:>3dk}".format(time.time() - t, len(times) // 1024))
 
 
 def connect_to_ts_database(uri: str) -> Any:

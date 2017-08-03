@@ -31,37 +31,52 @@ class TSStatInfo:
                                         b2ssize_10(self.total), self.units)
 
 
-class VM:
-    def __init__(self, vm_id: str) -> None:
-        self.vm_id = vm_id
-        self.metrics = {}  # type: Dict[str, Dict[str, TSStatInfo]]
-        self.vm_id_short = vm_id[:6]
-        self.start_time = None
-        self.stop_time = None
+class Node:
+    def __init__(self, name: str, is_vm: bool) -> None:
+        self.name = name
+        self.is_vm = is_vm
+        self.metrics = {}  # type: Dict[str, Dict[str, Union[numpy.ndarray, Callable[[], numpy.ndarray]]]]
+        self.start_time = None  # type: float
+        self.stop_time = None  # type: float
+        self.name_short = name[:6] if is_vm else name
+        self.times = None  # type: numpy.ndarray
 
-    def __lt__(self, vm):
-        return self.vm_id < vm.vm_id
+    def metric(self, dev, metric) -> numpy.ndarray:
+        data = self.metrics[dev][metric]
+
+        if not isinstance(data, numpy.ndarray):
+            data = data()
+            self.metrics[dev][metric] = data
+
+        return data
+
+    def __lt__(self, node: 'Node') -> bool:
+        return self.name < node.name
 
     @property
     def lifetime(self) -> float:
         return self.stop_time - self.start_time
 
     def __str__(self) -> str:
-        return "VM({})".format(self.vm_id)
+        return ("VM({})" if self.is_vm else "Node({})").format(self.name)
 
     @property
     def full_info(self) -> str:
-        res = "VM({})".format(self.vm_id)
+        res = str(self)
         step = "    "
-        res += "\n" + step + "Lifetime: {:.1f}H".format(self.lifetime / 3600)
+        if self.is_vm:
+            res += "\n" + step + "Lifetime: {:.1f}H".format(self.lifetime / 3600)
         for metric, data in sorted(self.metrics.items()):
             res += "\n" + step + metric
             for dev, stat in sorted(data.items()):
                 res += "\n" + step * 2 + "{}: {!s}".format(dev, stat)
         return res
 
+    def has_metric(self, device: str, metric: str) -> bool:
+        return metric in self.metrics.get(device, {})
 
-VMHistoFunc = Callable[[VM], numpy.ndarray]
+
+NodeHistoFunc = Callable[[Node], numpy.ndarray]
 
 
 class Metric1D:
@@ -141,6 +156,15 @@ class IOMetricsWriteVda(Metric1D):
     filters = [cut1d_r(2), blur1d()]
 
 
+def disk_metric(disk_name: str, metric_name: str) -> Metric1D:
+    class _MTR(Metric1D):
+        device = disk_name
+        metric = metric_name
+        histo_bins = numpy.linspace(0, 400, 20)
+        filters = [cut1d_r(2), blur1d()]
+    return _MTR()
+
+
 class IOMetricsWriteWszVda(Metric2D, IOMetricsWriteVda):
     metric2 = 'w_size'
     histo_bins2 = numpy.linspace(0, 600, 20)
@@ -149,9 +173,9 @@ class IOMetricsWriteWszVda(Metric2D, IOMetricsWriteVda):
 
 def histo1d(device: str, metric: str, bins: numpy.ndarray,
             norm: bool = True,
-            filters: List[ArrTransformer] = None) -> VMHistoFunc:
-    def closure(vm: VM) -> numpy.ndarray:
-        data = vm.metrics[device][metric].copy()
+            filters: List[ArrTransformer] = None) -> NodeHistoFunc:
+    def closure(vm: Node) -> numpy.ndarray:
+        data = vm.metric(device, metric).copy()
         numpy.clip(data, bins[0], bins[-1], data)
         histo = numpy.histogram(data, bins)[0]
 
@@ -169,10 +193,10 @@ def histo1d(device: str, metric: str, bins: numpy.ndarray,
 def histo2d(device: str, metric1: str, metric2: str,
             bins1: numpy.ndarray, bins2: numpy.ndarray,
             norm: bool = True,
-            filters: List[ArrTransformer] = None) -> VMHistoFunc:
-    def closure(vm: VM) -> numpy.ndarray:
-        x = vm.metrics[device][metric1].copy()
-        y = vm.metrics[device][metric2].copy()
+            filters: List[ArrTransformer] = None) -> NodeHistoFunc:
+    def closure(vm: Node) -> numpy.ndarray:
+        x = vm.metric(device, metric1).copy()
+        y = vm.metric(device, metric2).copy()
         numpy.clip(x, bins1[0], bins1[-1], x)
         numpy.clip(y, bins2[0], bins2[-1], y)
         histo = numpy.histogram2d(x, y, bins=(bins1, bins2))[0]
@@ -192,7 +216,7 @@ def influxtime2tm(val):
     return time.mktime(time.strptime(val, "%Y-%m-%dT%H:%M:%S.%fZ" if '.' in val else "%Y-%m-%dT%H:%M:%SZ"))
 
 
-def add_iop_size(vm: VM, device: str) -> None:
+def add_iop_size(vm: Node, device: str) -> None:
     per_dev = vm.metrics[device]
     oct_write = per_dev['virt_disk_octets_write']
     oct_read = per_dev['virt_disk_octets_read']

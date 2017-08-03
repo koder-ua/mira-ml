@@ -1,10 +1,10 @@
 import sqlite3
-from typing import Dict, Tuple, Iterable
+from typing import List, Tuple, Iterable, Callable
 
 import numpy
 import msgpack
 
-from .data import VM, AnyNumArr
+from .data import Node, AnyNumArr
 
 
 class LocalDB:
@@ -49,6 +49,10 @@ class LocalDB:
         times_b, value_b = self.cr.fetchone()
         return (self.deserialize(times_b), self.deserialize(value_b))
 
+    def get_vals(self, key: str) -> Tuple[AnyNumArr, AnyNumArr]:
+        self.cr.execute("select vals from series where key=?", (key,))
+        return self.deserialize(self.cr.fetchone()[0])
+
     def __setitem__(self, key: str, val: Tuple[AnyNumArr, AnyNumArr]) -> None:
         times, values = val
         times_b = self.serialize(times)
@@ -66,15 +70,32 @@ class LocalDBNP(LocalDB):
         self.deserialize = lambda x: numpy.frombuffer(x, dtype=dtype)
 
 
-def load_vms(db: LocalDB) -> Dict[str, VM]:
-    vms = {}
+def load_ts_later(db, key) -> Callable[[], numpy.ndarray]:
+    def closure():
+        return db.get_vals(key)
+    return closure
+
+
+def load_nodes(db: LocalDB, vm: bool = None) -> List[Node]:
+    nodes = {}
 
     for key in sorted(db):
-        metric, instance, device = key.split(",")
-        vm = vms.setdefault(instance, VM(instance))
-        times, data = db[key]
-        vm.metrics.setdefault(device, {})[metric] = numpy.array(data)
-        vm.start_time = times[0]
-        vm.stop_time = times[-1]
+        metric, name, device, is_vm = key.split(",")
+        if vm is True and is_vm == '0':
+            continue
+        if vm is False and is_vm == '1':
+            continue
 
-    return vms
+        node = nodes.setdefault(name, Node(name, is_vm == '1'))
+
+        dct = node.metrics.setdefault(device, {})
+        if node.start_time is None:
+            times, data = db[key]
+            dct[metric] = data
+            node.start_time = times[0]
+            node.stop_time = times[-1]
+            node.times = times
+        else:
+            dct[metric] = load_ts_later(db, key)
+
+    return list(nodes.values())
