@@ -1,4 +1,5 @@
 import sys
+import os.path
 import argparse
 import itertools
 from typing import List, Dict
@@ -47,7 +48,7 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(prog='mira-ml', description=descr)
     parser.add_argument("-l", '--log-level', default='DEBUG', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'SILENT'],
                         help="Set log level")
-    parser.add_argument("-c", '--config', default='config.yaml', help="Config file path")
+    parser.add_argument("-c", '--config', default='~/.config/mira-ml.yaml', help="Config file path")
     subparsers = parser.add_subparsers(dest='subparser_name')
     # ---------------------------------------------------------------------
 
@@ -76,7 +77,7 @@ def parse_args(argv):
 def main(argv):
     opts = parse_args(argv[1:])
     cfg = Config()
-    cfg.__dict__.update(yaml.load(open(opts.config)))
+    cfg.__dict__.update(yaml.load(open(os.path.expanduser(opts.config))))
 
     if opts.subparser_name == 'ls':
         client = connect_to_ts_database(cfg.ts_db)
@@ -130,7 +131,10 @@ def main(argv):
             vms = load_nodes(db, vm=True)
             vms = [vm for vm in vms if vm.stop_time >= stop_time and vm.start_time <= start_time]
 
-            metr = CPUMetrics()
+            # metr = CPUMetrics()
+            # metric_slice = get_metric_slice(metr.device, metr.metric, start_time, stop_time)
+            metr = disk_metric('vda', 'virt_disk_octets_write')
+            metric_slice = get_metric_slice(metr.device, metr.metric, start_time, stop_time)
             dist_func = distance.euclidean
 
             base_vms = [vm for vm in vms if vm.name.startswith(reference_vm_id)]
@@ -145,7 +149,6 @@ def main(argv):
             gs = gridspec.GridSpec(1, 2)
             ax = pyplot.subplot(gs[0, 0])
 
-            metric_slice = get_metric_slice(metr.device, metr.metric, start_time, stop_time)
             plot_metrics(vms_l, metric_slice, ax)
             ax.set_title("Serie values", fontsize='xx-large')
 
@@ -209,10 +212,11 @@ def main(argv):
 
             for vec, node in zip(hw_vecs, hw_nodes_s):
                 vec = moving_average(vec, 90)
-                ax.plot(vec, label=node.name_short)
+                ax.plot(vec, color='blue', label=node.name_short)
+
             for vec, vm in zip(vm_vecs, vms):
                 vec = moving_average(vec, 90)
-                ax.plot(vec, label=vm.name_short)
+                ax.plot(vec, color='red', label=vm.name_short)
 
             ax.legend()
             ax.set_title("Serie metrics", fontsize='xx-large')

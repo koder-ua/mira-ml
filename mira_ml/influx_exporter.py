@@ -126,7 +126,7 @@ def lookup_vms(conn: Any, vm_ids: List[str]) -> Dict[str, Node]:
     for (metric, tags), serie in client.query(q).items():
         vm_id = tags['instance_id']
         if vm_id in vm_ids:
-            vm = vms[vm_id] = Node(vm_id)
+            vm = vms[vm_id] = Node(vm_id, is_vm=True)
             vm.start_time = influxtime2tm(list(serie)[0]['time'])
 
     q = "select last(value) from virt_cpu_time group by instance_id"

@@ -6,6 +6,7 @@ cbor
 certifi
 chardet
 cycler
+click
 decorator
 entrypoints
 h5py

@@ -83,7 +83,7 @@ def get_cross_dist(vecs1: List[numpy.ndarray],
 
 def complimentary_metric(vec1: numpy.ndarray, vec2: numpy.ndarray, max_val: float) -> Compl:
     """
-    Return pair of number, which show how complimentary vm profiles is, and
+    Return three number, which show how complimentary vm profiles is, and
     part of time, when summary profile was over max_val value and
     utilization which is equal to 1.0 if system if fully loaded(or overloaded) all the time
     """
